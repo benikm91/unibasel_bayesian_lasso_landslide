@@ -795,3 +795,12 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/r,pycharm,linux,windows,macos,jetbrains,latex,python,jupyternotebooks
+
+Aerial_Images_Studysites
+Explanatory_Variables_Datasets
+Grassland_Shapefile_Studysites
+Landslide_Points_Studysites
+Landslides_Mapped_Shapefiles_Studysites
+Outlines_Studysites
+Predictors_rda_Studysites
+Predictors_Stacks_Studysites

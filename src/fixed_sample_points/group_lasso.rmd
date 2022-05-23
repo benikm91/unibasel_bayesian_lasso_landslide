@@ -1,0 +1,476 @@
+---
+title: "Bayesian Lasso"
+output: Bayesian_Lasso
+---
+
+```{r}
+n.folds <- 5
+n.folds.hyperparameter <- 10
+```
+```{r}
+
+library(splitTools)
+
+# - load packages
+library('raster')
+library('spatial')
+library('glmnet')
+library('lmtest')
+library('reshape')
+library("dplyr")
+library("grpreg")
+library("caret")
+library("parallel") # for parallel computing?
+library("blockCV") # spatial crossvalidation
+library("shiny")
+library("rgdal")
+library("sf")
+library("ggplot2")
+library("data.table")
+library("stringr")
+library(MBSGS)
+library("pastecs")
+library(kableExtra)
+library(matrixStats)
+
+print(str_interp("Start at: ${Sys.Date()} | ${Sys.time()}"))
+
+```
+
+```{r}
+
+rbindx <- function(..., dfs=list(...)) {
+  ns <- unique(unlist(sapply(dfs, names)))
+  do.call(rbind, lapply(dfs, function(x) {
+    for(n in ns[! ns %in% names(x)]) {x[[n]] <- NA}; x }))
+}
+
+mode <- function(x) { # thanks to https://stackoverflow.com/questions/2547402/how-to-find-the-statistical-mode
+  ux <- unique(x)
+  tab <- tabulate(match(x, ux))
+  ux[tab == max(tab)]
+}
+
+Site <- "Val_Piora"
+
+current_dir <- "/Users/beni/Documents/BayianLasso/data/data/src/fixed_sample_points"
+data_dir <- file.path(current_dir, "out")
+out_dir <- file.path(current_dir, "out", "lasso_fixed")
+path <- file.path(data_dir, str_interp("${Site}_geo_df.feather"))
+
+```
+```{r}
+
+label <- c('lslpts')
+numeric_features_lauren <- c(
+  'elevation',
+  'slope',
+  'twi',  # Topographic wetness index
+  'flowacc',
+  'curvature_plan',
+  'curvature_profile',
+  'roughness',
+  'dist_t_Roads', # 'distance_to_roads',
+  'dist_t_Streams', # 'distance_to_streams',
+  'density_Roads', # 'density_roads',
+  'density_Streams', # 'density_streams',
+  # 'flowdir',
+  'CHELSA_max_value5Y',  # "max_precip_5Y"
+  'CHELSA_max_value10Y', # "max_precip_10Y"
+  # 'stack_precip_5Y',
+  # 'stack_precip_10Y',
+  'snow_days',
+  'snow_cover_days',
+  'grow_season_length',
+  'frost_ch_freq'
+)
+features_lauren <- c(
+  numeric_features_lauren,
+  'gesteinsklasse',
+  'aspect_factor'
+)
+
+load(str_interp("/Users/beni/Documents/BayianLasso/data/data/Predictors_rda_Studysites/${Site}_standardized.rda"))
+lsl_lauren_data <- subset(lsl_std, select=-c(aspect, flowdir, corine, ssgm, winter_P_30Y, veg_rough, lithology))
+lsl_lauren_data <- subset(lsl_lauren_data, select = c(label, 'x', 'y', features_lauren))
+
+```
+```{r}
+
+label <- c('lslpts')
+numeric_features_my <- c(
+  'elevation',
+  'slope',
+  'twi',  # Topographic wetness index
+  'flowacc',
+  'curvature_plan',
+  'curvature_profile',
+  'roughness',
+  'distance_to_roads',
+  'distance_to_streams',
+  'density_roads',
+  'density_streams',
+  'max_precip_5Y',
+  'max_precip_10Y',
+  'snow_days',
+  'snow_cover_days',
+  'grow_season_length',
+  'frost_ch_freq',
+  'flowdir',  # new
+  'stack_precip_5Y',  # new
+  'stack_precip_10Y'  # new
+)
+features_my <- c(
+  numeric_features_my,
+  'gesteinsklasse',
+  'aspect_factor'
+)
+
+lsl <- arrow::read_feather(path)
+
+lsl$aspect_factor <- lsl$aspect
+
+lsl$aspect_factor[lsl$aspect <= 22.5] <- "N"
+lsl$aspect_factor[lsl$aspect > 337.5] <- "N"
+lsl$aspect_factor[lsl$aspect > 22.5 & lsl$aspect <= 67.5] <- "NE"
+lsl$aspect_factor[lsl$aspect > 67.5 & lsl$aspect <= 112.5] <- "E"
+lsl$aspect_factor[lsl$aspect > 112.5 & lsl$aspect <= 157.5] <- "SE"
+lsl$aspect_factor[lsl$aspect > 157.5 & lsl$aspect <= 202.5] <- "S"
+lsl$aspect_factor[lsl$aspect > 202.5 & lsl$aspect <= 247.5] <- "SW"
+lsl$aspect_factor[lsl$aspect > 247.5 & lsl$aspect <= 292.5] <- "W"
+lsl$aspect_factor[lsl$aspect > 292.5 & lsl$aspect <= 337.5] <- "NW"
+lsl$aspect_factor <- as.factor(lsl$aspect_factor)
+
+lsl$lslpts <- lsl$landslide
+
+lsl$gesteinsklasse <- as.factor(lsl$gesteinsklasse)
+
+lsl <- subset(lsl, select = c(label, 'x', 'y', features_my))
+lsl <- lsl %>% mutate_at(numeric_features_my, scale)
+
+lsl_my_data <- lsl
+
+```
+
+
+```{r}
+
+handle_nan_values <- function (data) {
+    # Remove NaN values from data frame
+
+    if ("Lockergesteine" %in% unique(data$gesteinsklasse)) {
+      data$gesteinsklasse[is.na(data$gesteinsklasse)] <- "Lockergesteine"
+    } else {
+      data$gesteinsklasse[is.na(data$gesteinsklasse)] <- "Sedimentgesteine"
+    }
+    data$aspect_factor[is.na(data$aspect_factor)] <- "E"
+
+    data[is.na(data)] <- 0
+    data
+}
+
+one_hot_encode_factors <- function(data) {
+    # One Hot Encoded (dummy variables) factor features
+    options(na.action="na.fail")
+    data_ohe <- model.matrix(~ ., data = data)[, -1]  # -1 removes intercept
+
+    return (data_ohe)
+}
+
+remove_coordinates <- function(data) {
+    x <- subset(data, select=-c(x, y))
+    return(x)
+}
+
+split_label <- function(data) {
+    return(list(
+      x=subset(data, select=-c(lslpts)),
+      y=as.numeric(data$lslpts)
+    ))
+}
+
+preprocess <- function(x) {
+    return(x %>% handle_nan_values %>% one_hot_encode_factors %>% remove_coordinates)
+}
+
+calc_groups <- function(x, features) {
+    # - define groups: dummy coding of a factor is treated as group
+    # - alternative
+    # - find factors
+    l.covar <- features
+    l.factors <- names(x[l.covar])[t.f <- unlist(lapply(x[l.covar], is.factor))]
+    l.numeric <- names(t.f[!t.f])
+    # create a vector that labels the groups with the same number
+    groups <- c(
+      1:length(l.numeric),
+      unlist(
+        sapply(1:(length(l.factors)), function(n) {
+          rep(n + length(l.numeric), nlevels(x[[l.factors[n]]])-1)
+        })
+      )
+    )
+    return(groups)
+}
+
+# Example usage of functions
+
+groups <- calc_groups(lsl_my_data, features_my)
+
+# Split features and target variable
+res <- split_label(lsl_my_data)
+x <- res$x
+y <- res$y
+
+print(str_interp("NaN values before: ${sum(is.na(x))} / ${dim(x)}"))
+x_without_nan <- handle_nan_values(x)
+print(str_interp("NaN values after: ${sum(is.na(x_without_nan))} / ${dim(x_without_nan)}"))
+
+x <- preprocess(x)
+
+cat(str_interp("dim(x):         ${dim(x)[1]}, ${dim(x)[2]}"), sep="\n")
+cat(str_interp("length(y):      ${length(y)}"), sep="\n")
+cat(str_interp("length(groups): ${length(groups)}"), sep="\n")
+
+```
+```{r}
+
+plot_boxplot <- function(coefs, title) {
+    print(str_interp("${Sys.Date()} | ${Sys.time()}"))
+    data <- coefs
+    ggplot(stack(data), aes(x = ind, y = values)) +
+        geom_boxplot() +
+        ggtitle(title) +
+        scale_x_discrete(guide = guide_axis(angle = 90))
+}
+
+```
+```{r}
+
+cv.training <- function(data, features, k.boot = 20, n.folds = 5) {
+
+    # Needed for raster
+    elevation <- raster(str_interp("/Users/beni/Documents/BayianLasso/data/data/Explanatory_Variables_Datasets/Elevation/DEM_2m_${Site}.tif"))
+    pa_data <- sf::st_as_sf(data, coords = c("x", "y"), crs = raster::crs(elevation))
+
+    for (j in 1:k.boot) {
+
+        set.seed(j+1)
+        print(j)
+
+        # spatial blocking by specified range and random assignment
+        folds <- create_folds(seq(nrow(data)), type="basic", shuffle=TRUE, k = n.folds)
+
+        for (fold in folds) {
+
+            data.train <- data[fold, ]
+            data.test <- data[-fold, ]
+
+            groups <- calc_groups(data.train, features)
+
+            res <- split_label(data.train)
+            x.train <- preprocess(res$x)
+            y.train <- res$y
+
+            fit.grpreg <- cv.grpreg(
+                X = x.train,
+                y = y.train,
+                group = groups,
+                penalty = "grLasso",
+                family = "binomial",
+                nfolds = n.folds.hyperparameter,
+                nlambda = 100,
+                alpha = 1, # alpha=1 => No l2-regularization
+                returnY = TRUE
+            )
+
+            # - choose optimal lambda: CV minimum error + 1 SE (see glmnet)
+            l.se <- fit.grpreg$cve[fit.grpreg$min] + fit.grpreg$cvse[fit.grpreg$min]
+
+            idx.se <- min(which(fit.grpreg$cve < l.se))
+            lambda.min <- fit.grpreg$lambda.min
+            # - get the non-zero coefficients:
+            #coeffiecients.glmnet <- coef(glmnet.glmnet, s=lambda.min)
+            coef.grpreg <- fit.grpreg$fit$beta[, idx.se]
+
+            coefs.boot.row <- data.frame(t(coef.grpreg))
+            colnames(coefs.boot.row) <- names(coef.grpreg)
+            coefs.boot.df <- rbindx(coefs.boot.row, if(exists("coefs.boot.df")) coefs.boot.df)
+        }
+    }
+
+    coefs.boot.df
+}
+
+```
+```{r}
+
+coef_frequentist.nonblock.lauren <- cv.training(lsl_lauren_data, features_lauren, 20, 5)
+
+```
+
+```{r}
+
+plot_boxplot(coef_frequentist.nonblock.lauren, str_interp("Frequentist Lauren: ${Site}"))
+
+```
+
+```{r}
+
+cv.block.training <- function(data, features, k.boot = 20, n.folds = 5) {
+
+    # Needed for raster
+    elevation <- raster(str_interp("/Users/beni/Documents/BayianLasso/data/data/Explanatory_Variables_Datasets/Elevation/DEM_2m_${Site}.tif"))
+    pa_data <- sf::st_as_sf(data, coords = c("x", "y"), crs = raster::crs(elevation))
+
+    for (j in 1:k.boot) {
+
+        set.seed(j+1)
+        print(j)
+
+        # spatial blocking by specified range and random assignment
+        sb1 <- spatialBlock(speciesData = pa_data,
+                            species = "lslpts",
+                            theRange = 1000,
+                            rasterLayer = elevation,
+                            k = n.folds,
+                            selection = "random",
+                            iteration = 10,
+                            showBlocks = FALSE)
+        cvID <- sb1$foldID
+        # - merge data together with ID subset
+        data.ID <- cbind(data, cvID)
+        for (i in 1:n.folds) {
+            data.train <- subset(data.ID, cvID != i, select = -c(cvID))
+            data.test <- subset(data.ID, cvID == i, select = -c(cvID))
+
+            groups <- calc_groups(data.train, features)
+
+            res <- split_label(data.train)
+            x.train <- preprocess(res$x)
+            y.train <- res$y
+
+            fit.grpreg <- cv.grpreg(
+                X = x.train,
+                y = y.train,
+                group = groups,
+                penalty = "grLasso",
+                family = "binomial",
+                nfolds = n.folds.hyperparameter,
+                nlambda = 100,
+                alpha = 1, # alpha=1 => No l2-regularization
+                returnY = TRUE
+            )
+
+            # - choose optimal lambda: CV minimum error + 1 SE (see glmnet)
+            l.se <- fit.grpreg$cve[fit.grpreg$min] + fit.grpreg$cvse[fit.grpreg$min]
+
+            idx.se <- min(which(fit.grpreg$cve < l.se))
+            lambda.min <- fit.grpreg$lambda.min
+            # - get the non-zero coefficients:
+            #coeffiecients.glmnet <- coef(glmnet.glmnet, s=lambda.min)
+            coef.grpreg <- fit.grpreg$fit$beta[, idx.se]
+
+            coefs.boot.row <- data.frame(t(coef.grpreg))
+            colnames(coefs.boot.row) <- names(coef.grpreg)
+            coefs.boot.df <- rbindx(coefs.boot.row, if(exists("coefs.boot.df")) coefs.boot.df)
+        }
+    }
+
+    coefs.boot.df
+}
+
+```
+
+
+```{r}
+
+coef_frequentist.lauren <- cv.block.training(lsl_lauren_data, features_lauren, 20, 5)
+
+```
+```{r}
+
+plot_boxplot(coef_frequentist.lauren, str_interp("Frequentist Lauren: ${Site}"))
+
+```
+
+```{r}
+
+coef_frequentist.my <- cv.block.training(lsl_my_data, features_my, 20, 5)
+
+```
+```{r}
+
+plot_boxplot(coef_frequentist.my, str_interp("Frequentist My: ${Site}"))
+
+```
+
+```{r}
+
+bayesian.training <- function(data, features) {
+
+    groups <- calc_groups(data, features)
+
+    old_g <- -1
+    group_size <- integer()
+    for (g in groups) {
+        if (g == old_g) {
+            group_size[[g]] <- group_size[[g]] + 1
+        } else {
+            group_size[g] <- 1
+        }
+        old_g <- g
+    }
+
+    res <- split_label(data)
+    x <- preprocess(res$x)
+    y <- res$y
+
+    res <- BGLSS(
+        y,
+        x,
+        niter = 10000,
+        burnin = 5000,
+        group_size = group_size,
+        a = 1,
+        b = 1,
+        num_update = 100,
+        niter.update = 100,
+        verbose = FALSE,
+        alpha = 0.1,
+        gamma = 0.1,
+        pi_prior = TRUE,
+        pi = 0.5,
+        update_tau = TRUE,
+        option.weight.group = FALSE,
+        option.update = "global",
+        lambda2_update = NULL
+    )
+
+    coef.bayesian <- t(res$coef)
+    colnames(coef.bayesian) <- colnames(x)
+    data.frame(coef.bayesian)
+}
+
+```
+```{r}
+
+add_intercept <- function(data) {
+    cbind('(intercept)'=1, data)
+}
+```
+```{r}
+coef.bayesian.lauren <- bayesian.training(add_intercept(lsl_lauren_data), c('(intercept)', features_lauren))
+```
+```{r}
+plot_boxplot(coef.bayesian.lauren, str_interp("Bayesian Lauren: ${Site}"))
+```
+```{r}
+coef.bayesian.my <- bayesian.training(lsl_my_data, features_my)
+```
+```{r}
+plot_boxplot(coef.bayesian.my, str_interp("Bayesian My: ${Site}"))
+```
+
+
+
+
