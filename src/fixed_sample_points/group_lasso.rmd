@@ -11,6 +11,8 @@ n.folds.hyperparameter <- 10
 
 library(splitTools)
 
+library(fst)
+
 # - load packages
 library('raster')
 library('spatial')
@@ -51,7 +53,17 @@ mode <- function(x) { # thanks to https://stackoverflow.com/questions/2547402/ho
   ux[tab == max(tab)]
 }
 
-Site <- "Val_Piora"
+Site <- "Arosa"
+# Site <- "Baulmes"
+# Site <- "Chrauchtal"
+# Site <- "Hornbach"
+# Site <- "Model_Scores"
+# Site <- "Rappetal"
+# Site <- "Turbach"
+# Site <- "Urseren"
+# Site <- "Val_Cluozza"
+# Site <- "Val_D_Entremont"
+# Site <- "Val_Piora"
 
 current_dir <- "/Users/beni/Documents/BayianLasso/data/data/src/fixed_sample_points"
 data_dir <- file.path(current_dir, "out")
@@ -84,10 +96,13 @@ numeric_features_lauren <- c(
   'grow_season_length',
   'frost_ch_freq'
 )
-features_lauren <- c(
-  numeric_features_lauren,
+categorical_features_lauren <- c(
   'gesteinsklasse',
   'aspect_factor'
+)
+features_lauren <- c(
+  numeric_features_lauren,
+  categorical_features_lauren
 )
 
 load(str_interp("/Users/beni/Documents/BayianLasso/data/data/Predictors_rda_Studysites/${Site}_standardized.rda"))
@@ -120,10 +135,13 @@ numeric_features_my <- c(
   'stack_precip_5Y',  # new
   'stack_precip_10Y'  # new
 )
-features_my <- c(
-  numeric_features_my,
+categorical_features_my <- c(
   'gesteinsklasse',
   'aspect_factor'
+)
+features_my <- c(
+  numeric_features_my,
+  categorical_features_my
 )
 
 lsl <- arrow::read_feather(path)
@@ -171,10 +189,7 @@ handle_nan_values <- function (data) {
 
 one_hot_encode_factors <- function(data) {
     # One Hot Encoded (dummy variables) factor features
-    options(na.action="na.fail")
-    data_ohe <- model.matrix(~ ., data = data)[, -1]  # -1 removes intercept
-
-    return (data_ohe)
+    fastDummies::dummy_cols(lsl_my_data, select_columns = categorical_features_lauren, remove_selected_columns=TRUE, remove_first_dummy = TRUE)
 }
 
 remove_coordinates <- function(data) {
@@ -231,7 +246,16 @@ cat(str_interp("dim(x):         ${dim(x)[1]}, ${dim(x)[2]}"), sep="\n")
 cat(str_interp("length(y):      ${length(y)}"), sep="\n")
 cat(str_interp("length(groups): ${length(groups)}"), sep="\n")
 
+library(fastDummies)
+
 ```
+```{r}
+
+# Example of fastDummies
+fastDummies::dummy_cols(lsl_my_data, select_columns = c("aspect_factor", "gesteinsklasse"), remove_selected_columns=TRUE, remove_first_dummy = TRUE)
+
+```
+
 ```{r}
 
 plot_boxplot <- function(coefs, title) {
@@ -271,6 +295,7 @@ cv.training <- function(data, features, k.boot = 20, n.folds = 5) {
             x.train <- preprocess(res$x)
             y.train <- res$y
 
+            # grpreg: standardizes the data and includes an intercept by default
             fit.grpreg <- cv.grpreg(
                 X = x.train,
                 y = y.train,
@@ -304,13 +329,13 @@ cv.training <- function(data, features, k.boot = 20, n.folds = 5) {
 ```
 ```{r}
 
-coef_frequentist.nonblock.lauren <- cv.training(lsl_lauren_data, features_lauren, 20, 5)
+# coef_frequentist.nonblock.lauren <- cv.training(lsl_lauren_data, features_lauren, 20, 5)
 
 ```
 
 ```{r}
 
-plot_boxplot(coef_frequentist.nonblock.lauren, str_interp("Frequentist Lauren: ${Site}"))
+# plot_boxplot(coef_frequentist.nonblock.lauren, str_interp("Frequentist Lauren: ${Site}"))
 
 ```
 
@@ -389,18 +414,18 @@ coef_frequentist.lauren <- cv.block.training(lsl_lauren_data, features_lauren, 2
 ```
 ```{r}
 
-plot_boxplot(coef_frequentist.lauren, str_interp("Frequentist Lauren: ${Site}"))
+plot_boxplot(coef_frequefrequentist.lauren, str_interp("Frequentist Lauren: ${Site}"))
 
 ```
 
 ```{r}
 
-coef_frequentist.my <- cv.block.training(lsl_my_data, features_my, 20, 5)
+# coef_frequentist.my <- cv.block.training(lsl_my_data, features_my, 20, 5)
 
 ```
 ```{r}
 
-plot_boxplot(coef_frequentist.my, str_interp("Frequentist My: ${Site}"))
+# plot_boxplot(coef_frequentist.my, str_interp("Frequentist My: ${Site}"))
 
 ```
 
@@ -465,12 +490,29 @@ coef.bayesian.lauren <- bayesian.training(add_intercept(lsl_lauren_data), c('(in
 plot_boxplot(coef.bayesian.lauren, str_interp("Bayesian Lauren: ${Site}"))
 ```
 ```{r}
-coef.bayesian.my <- bayesian.training(lsl_my_data, features_my)
+# coef.bayesian.my <- bayesian.training(lsl_my_data, features_my)
 ```
 ```{r}
-plot_boxplot(coef.bayesian.my, str_interp("Bayesian My: ${Site}"))
+# plot_boxplot(coef.bayesian.my, str_interp("Bayesian My: ${Site}"))
 ```
 
 
 
 
+```{r}
+# write.fst(coef_frequentist.nonblock.lauren, str_interp('res/coef/freq/${Site}_coef_frequentist.nonblock.lauren.fst'))
+write.fst(coef_frequentist.lauren, str_interp('res/coef/freq/${Site}_coef_frequentist.block.lauren.fst'))
+write.fst(coef.bayesian.lauren, str_interp('res/coef/freq/${Site}_coef_bayesian.lauren.fst'))
+
+```
+```{r}
+
+y_max <- max(max(coef_frequentist.lauren, na.rm = TRUE), max(coef.bayesian.lauren, na.rm = TRUE))
+y_min <- min(min(coef_frequentist.lauren, na.rm = TRUE), min(coef.bayesian.lauren, na.rm = TRUE))
+a <- plot_boxplot(coef_frequentist.lauren, str_interp("${Site} (Frequentist)")) +
+    ylim(y_min, y_max)
+b <- plot_boxplot(coef.bayesian.lauren, str_interp("${Site} (Bayesian)")) +
+    ylim(y_min, y_max)
+print (a / b)
+
+```

@@ -1,0 +1,153 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+```{r}
+
+library(care)
+library(grpreg)
+library(MBSGS)
+library(ggplot2)
+library(splitTools)
+
+
+# load Efron et al. (2004) diabetes data set
+data(efron2004)
+dim(efron2004$x) # 442 10
+colnames(efron2004$x)
+length(efron2004$y) # 442
+
+x <- data.matrix(efron2004$x)
+y <- efron2004$y
+
+print(dim(efron2004$x))
+print(typeof(efron2004$x))
+print(dim(x))
+
+```
+```{r}
+
+add_intercept <- function(data) {
+    cbind('(intercept)'=1, data)
+}
+
+x_with_intercept <- add_intercept(x)
+
+res <- BGLSS(
+    y,
+    x_with_intercept,
+    niter = 10000,
+    burnin = 5000,
+    group_size = rep(1, ncol(x_with_intercept)),
+    a = 1,
+    b = 1,
+    num_update = 100,
+    niter.update = 100,
+    verbose = FALSE,
+    alpha = 0.1,
+    gamma = 0.1,
+    pi_prior = TRUE,
+    pi = 0.5,
+    update_tau = TRUE,
+    option.weight.group = FALSE,
+    option.update = "global",
+    lambda2_update = NULL
+)
+
+coef.bayesian <- t(res$coef)
+colnames(coef.bayesian) <- colnames(x_with_intercept)
+coef.bayesian <- data.frame(coef.bayesian)
+
+```
+
+```{r}
+
+k.boot <- 20
+n.folds <- 5
+n.folds.hyperparameter <- 5
+
+rbindx <- function(..., dfs=list(...)) {
+  ns <- unique(unlist(sapply(dfs, names)))
+  do.call(rbind, lapply(dfs, function(x) {
+    for(n in ns[! ns %in% names(x)]) {x[[n]] <- NA}; x }))
+}
+
+coefs.boot.df <- NULL
+
+for (j in 1:k.boot) {
+
+    set.seed(j+1)
+    print(j)
+
+    # spatial blocking by specified range and random assignment
+    folds <- create_folds(seq(nrow(x)), type="basic", shuffle=TRUE, k = n.folds)
+
+    for (fold in folds) {
+
+
+        x.train <- x[fold, ]
+        y.train <- y[fold, ]
+        x.test <- x[-fold, ]
+        y.test <- y[-fold, ]
+
+        fit.grpreg <- cv.grpreg(
+                X = matrix(x.train, ncol=10),
+                y = y.train,
+                group = 1:ncol(x),
+                penalty = "grLasso",
+                family = "gaussian",
+                nfolds = n.folds.hyperparameter,
+                nlambda = 100,
+                alpha = 1, # alpha=1 => No l2-regularization
+                returnY = TRUE
+            )
+
+        # - choose optimal lambda: CV minimum error + 1 SE (see glmnet)
+        l.se <- fit.grpreg$cve[fit.grpreg$min] + fit.grpreg$cvse[fit.grpreg$min]
+
+        idx.se <- min(which(fit.grpreg$cve < l.se))
+        lambda.min <- fit.grpreg$lambda.min
+        # - get the non-zero coefficients:
+        #coeffiecients.glmnet <- coef(glmnet.glmnet, s=lambda.min)
+        coef.grpreg <- fit.grpreg$fit$beta[, idx.se]
+
+        coefs.boot.row <- data.frame(t(coef.grpreg))
+        colnames(coefs.boot.row) <- names(coef.grpreg)
+        coefs.boot.df <- rbindx(coefs.boot.row, if(exists("coefs.boot.df")) coefs.boot.df)
+    }
+
+}
+
+coef.frequentist <- coefs.boot.df
+print(coef.frequentist)
+
+```
+
+```{r}
+
+plot_boxplot <- function(coefs, title) {
+    data <- coefs
+    ggplot(stack(data), aes(x = ind, y = values)) +
+        geom_boxplot() +
+        ggtitle(title) +
+        scale_x_discrete(guide = guide_axis(angle = 90))
+}
+
+y_max <- max(max(coef.frequentist, na.rm = TRUE), max(coef.bayesian, na.rm = TRUE))
+y_min <- min(min(coef.frequentist, na.rm = TRUE), min(coef.bayesian, na.rm = TRUE))
+
+a <- plot_boxplot(coef.frequentist, "Frequentist") +
+    ylim(y_min, y_max)
+
+b <- plot_boxplot(coef.bayesian, "Bayesian") +
+    ylim(y_min, y_max)
+
+# p <- a / b
+
+print(colnames(coef.grpreg))
+
+# print(a)
+# print(b)
+
+```

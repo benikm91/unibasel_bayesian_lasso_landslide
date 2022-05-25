@@ -1,0 +1,93 @@
+---
+title: "Plot Coefficients (Frequentist and Bayesian)"
+output: plot_coefficients
+---
+
+```{r}
+
+library(fst)
+library("stringr")
+library("ggplot2")
+library("cowplot")
+library(patchwork) # To display 2 charts together
+```
+```{r}
+
+sites <- c(
+    "Arosa",
+    # "Baulmes",
+    "Chrauchtal",
+    "Hornbach",
+    "Rappetal",
+    "Turbach",
+    # "Urseren",
+    # "Val_Cluozza",
+    # "Val_D_Entremont",
+    "Val_Piora"
+)
+
+```
+```{r}
+
+plot_boxplot <- function(coefs, title) {
+    data <- coefs
+    ggplot(stack(data), aes(x = ind, y = values)) +
+        geom_boxplot() +
+        ggtitle(title) +
+        scale_x_discrete(guide = guide_axis(angle = 90))
+}
+
+```
+
+```{r}
+
+coefs.frequentist.lauren <- c()
+coefs.bayesian.lauren <- c()
+
+for (site in sites) {
+    print(site)
+    coefs.frequentist.lauren[[site]] <- read.fst(str_interp('res/coef/freq/${site}_coef_frequentist.block.lauren.fst'))
+    coefs.bayesian.lauren[[site]] <- read.fst(str_interp('res/coef/freq/${site}_coef_bayesian.lauren.fst'))
+}
+
+```
+```{r ggplot}
+
+print(plot_boxplot(coefs.frequentist.lauren[['Arosa']], str_interp("Arosa (Frequentist)")))
+print(plot_boxplot(coefs.bayesian.lauren[['Arosa']], str_interp("Arosa (Bayesian)")))
+
+```
+```{r ggplot}
+
+# Note that: exp(coef) = odds(Y=1 | X = 1) / odds(Y=1 | X = 0)
+
+for (site in sites) {
+    print(site)
+    y_max <- max(max(coefs.frequentist.lauren[[site]], na.rm = TRUE), max(coefs.bayesian.lauren[[site]], na.rm = TRUE))
+    y_min <- min(min(coefs.frequentist.lauren[[site]], na.rm = TRUE), min(coefs.bayesian.lauren[[site]], na.rm = TRUE))
+    a <- plot_boxplot(coefs.frequentist.lauren[[site]], str_interp("${site} (Frequentist)")) +
+        ylim(y_min, y_max)
+    b <- plot_boxplot(coefs.bayesian.lauren[[site]], str_interp("${site} (Bayesian)")) +
+        ylim(y_min, y_max)
+    p <- a / b
+    print(p)
+}
+
+```
+
+```{r ggplot}
+
+# Note that: exp(coef) = odds(Y=1 | X = 1) / odds(Y=1 | X = 0) due to log odd (p. 164)
+
+for (site in c('Arosa')) {
+    print(site)
+    y_max <- max(max(coefs.frequentist.lauren[[site]], na.rm = TRUE), max(exp(coefs.bayesian.lauren[[site]]), na.rm = TRUE))
+    a <- plot_boxplot(exp(coefs.frequentist.lauren[[site]]), str_interp("${site} (Frequentist)")) +
+        ylim(0, y_max)
+    b <- plot_boxplot(exp(coefs.bayesian.lauren[[site]]), str_interp("${site} (Bayesian)")) +
+        ylim(0, y_max)
+    p <- a / b
+    print(p)
+}
+
+```
