@@ -1,0 +1,508 @@
+```{r}
+
+library(splitTools)
+
+library(fst)
+
+# - load packages
+library('raster')
+library('spatial')
+library('glmnet')
+library('lmtest')
+library('reshape')
+library("dplyr")
+library("grpreg")
+library("caret")
+library("parallel") # for parallel computing?
+library("blockCV") # spatial crossvalidation
+library("shiny")
+library("rgdal")
+library("sf")
+library("ggplot2")
+library("data.table")
+library("stringr")
+library(MBSGS)
+library("pastecs")
+library(kableExtra)
+library(matrixStats)
+library(fastDummies)
+library(useful)
+
+print(str_interp("Start at: ${Sys.Date()} | ${Sys.time()}"))
+
+rbindx <- function(..., dfs=list(...)) {
+  ns <- unique(unlist(sapply(dfs, names)))
+  do.call(rbind, lapply(dfs, function(x) {
+    for(n in ns[! ns %in% names(x)]) {x[[n]] <- NA}; x }))
+}
+
+mode <- function(x) { # thanks to https://stackoverflow.com/questions/2547402/how-to-find-the-statistical-mode
+  ux <- unique(x)
+  tab <- tabulate(match(x, ux))
+  ux[tab == max(tab)]
+}
+
+Sites <- c(
+    # # "Arosa",
+    # ## "Baulmes",
+    # # "Chrauchtal",
+    # # "Hornbach",
+    "Rappetal",
+    # # "Turbach",
+    # # "Urseren",
+    # # "Val_Cluozza"
+    "Val_D_Entremont",
+    "Val_Piora"
+)
+
+current_dir <- "/Users/beni/Documents/BayianLasso/data/data/src/fixed_sample_points"
+data_dir <- file.path(current_dir, "out")
+out_dir <- file.path(current_dir, "out", "aspect")
+
+brier.k.boot <- 500
+k.boot <- 20
+n.folds <- 5
+n.folds.hyperparameter <- 10
+
+names <- c()
+for (Site in Sites) {
+    names <- c(names, str_interp("${Site}$ohe4"), str_interp("${Site}$ohe8"), str_interp("${Site}$rbf4"), str_interp("${Site}$rbf8"))
+}
+
+# prep result matrix
+boot.correct  <- matrix( NA, nrow=brier.k.boot, ncol=length(names), dimnames=list(NULL,names ))
+
+    flatten.results <- function(data) {
+        y <- vector()
+        y_hat <- vector()
+
+        for (j in seq_along(data$y)) {
+
+            y.boot <- data$y[[j]]
+            y_hat.boot <- data$y_hat[[j]]
+
+            y <- c(y, y.boot)
+            y_hat <- c(y_hat, y_hat.boot)
+        }
+
+        res <- c()
+        res$y <- y
+        res$y_hat <- y_hat
+        res
+    }
+
+```
+```{r}
+
+for (Site in Sites) {
+
+    print(Site)
+
+    path <- file.path(data_dir, str_interp("${Site}_geo_df.feather"))
+
+    label <- c('lslpts')
+    numeric_features_init <- c(
+      'elevation',
+      'slope',
+      'twi',  # Topographic wetness index
+      'flowacc',
+      'curvature_plan',
+      'curvature_profile',
+      'roughness',
+      'distance_to_roads',
+      'distance_to_streams',
+      'density_roads',
+      'density_streams',
+      'max_precip_5Y',
+      'max_precip_10Y',
+      'snow_days',
+      'snow_cover_days',
+      'grow_season_length',
+      'frost_ch_freq'
+      # 'flowdir',  # new
+      # 'stack_precip_5Y',  # new
+      # 'stack_precip_10Y'  # new
+    )
+    categorical_features_init <- c(
+      'gesteinsklasse'
+    )
+    features_init <- c(
+      numeric_features_init,
+      categorical_features_init
+    )
+
+    numeric_features <- numeric_features_init
+    categorical_features <- categorical_features_init
+    features <- features_init
+
+    lsl <- arrow::read_feather(path)
+    lsl[label] <- lsl['landslide']
+
+    lsl_data <- lsl
+    lsl_data$gesteinsklasse <- as.factor(lsl_data$gesteinsklasse)
+
+
+    lsl_data$aspect[is.na(lsl_data$aspect)] <- 0
+
+    subset_features <- function (data) {
+        subset(data, select = features)
+    }
+
+    handle_missing_values <- function(data) {
+        if ("Lockergesteine" %in% unique(data$gesteinsklasse)) {
+          data$gesteinsklasse[is.na(data$gesteinsklasse)] <- "Lockergesteine"
+        } else {
+          data$gesteinsklasse[is.na(data$gesteinsklasse)] <- "Sedimentgesteine"
+        }
+        data
+    }
+
+    handle_nan_values <- function (data) {
+        # Remove NaN values from data frame
+        data[is.na(data)] <- 0
+        data
+    }
+
+    one_hot_encode <- function(data) {
+        # One Hot Encoded (dummy variables) factor features
+        fastDummies::dummy_cols(data, select_columns = categorical_features, remove_selected_columns=TRUE, remove_first_dummy = TRUE)
+    }
+
+    split_label <- function(data) {
+        return(list(
+          x=subset(data, select=-c(lslpts)),
+          y=as.numeric(data$lslpts)
+        ))
+    }
+
+    factor_8_encode_aspect <- function(data) {
+        data$aspect_factor <- data$aspect
+
+        data$aspect_factor[data$aspect <= 22.5] <- "N"
+        data$aspect_factor[data$aspect > 337.5] <- "N"
+        data$aspect_factor[data$aspect > 22.5 & data$aspect <= 67.5] <- "NE"
+        data$aspect_factor[data$aspect > 67.5 & data$aspect <= 112.5] <- "E"
+        data$aspect_factor[data$aspect > 112.5 & data$aspect <= 157.5] <- "SE"
+        data$aspect_factor[data$aspect > 157.5 & data$aspect <= 202.5] <- "S"
+        data$aspect_factor[data$aspect > 202.5 & data$aspect <= 247.5] <- "SW"
+        data$aspect_factor[data$aspect > 247.5 & data$aspect <= 292.5] <- "W"
+        data$aspect_factor[data$aspect > 292.5 & data$aspect <= 337.5] <- "NW"
+        data$aspect_factor <- as.factor(data$aspect_factor)
+
+        categorical_features <<- c(categorical_features, 'aspect_factor')
+        features <<- c(features, 'aspect_factor')
+
+        data
+    }
+
+    factor_4_encode_aspect <- function(data) {
+        data$aspect_factor <- data$aspect
+
+        data$aspect_factor[data$aspect <= 45] <- "N"
+        data$aspect_factor[data$aspect > 315] <- "N"
+        data$aspect_factor[data$aspect > 45 & data$aspect <= 135] <- "E"
+        data$aspect_factor[data$aspect > 135 & data$aspect <= 225] <- "S"
+        data$aspect_factor[data$aspect > 225 & data$aspect <= 315] <- "W"
+        data$aspect_factor <- as.factor(data$aspect_factor)
+
+        categorical_features <<- c(categorical_features, 'aspect_factor')
+        features <<- c(features, 'aspect_factor')
+
+        data
+    }
+
+    rbf_4_aspect <- function(data) {
+
+      radial <- function(a, b) {
+          std <- 0.5
+          v <- std^2
+          return(exp(-((a$x - b$x)^2 + (a$y - b$y)^2)/(2*v)))
+      }
+
+      cart <- pol2cart(1, data$aspect, degrees = TRUE)
+
+      n_cart <- pol2cart(1, 0, degrees = TRUE)
+      e_cart <- pol2cart(1, 90, degrees = TRUE)
+      s_cart <- pol2cart(1, 180, degrees = TRUE)
+      w_cart <- pol2cart(1, 270, degrees = TRUE)
+
+      data$aspect_northness<- radial(cart, n_cart)
+      data$aspect_eastness <- radial(cart, e_cart)
+      data$aspect_southness <- radial(cart, s_cart)
+      data$aspect_westness <- radial(cart, w_cart)
+
+      numeric_features <<- c(numeric_features, 'aspect_northness', 'aspect_eastness', 'aspect_southness', 'aspect_westness')
+      features <<- c(features, 'aspect_northness', 'aspect_eastness', 'aspect_southness', 'aspect_westness')
+
+      data
+    }
+
+    rbf_8_aspect <- function(data) {
+
+      radial <- function(a, b) {
+          std <- 0.25
+          v <- std^2
+          return(exp(-((a$x - b$x)^2 + (a$y - b$y)^2)/(2*v)))
+      }
+
+      cart <- pol2cart(1, data$aspect, degrees = TRUE)
+
+      n_cart <- pol2cart(1, 0, degrees = TRUE)
+      ne_cart <- pol2cart(1, 45, degrees = TRUE)
+      e_cart <- pol2cart(1, 90, degrees = TRUE)
+      se_cart <- pol2cart(1, 135, degrees = TRUE)
+      s_cart <- pol2cart(1, 180, degrees = TRUE)
+      sw_cart <- pol2cart(1, 225, degrees = TRUE)
+      w_cart <- pol2cart(1, 270, degrees = TRUE)
+      nw_cart <- pol2cart(1, 315, degrees = TRUE)
+
+      data$aspect_northness<- radial(cart, n_cart)
+      data$aspect_northeastness<- radial(cart, ne_cart)
+      data$aspect_eastness <- radial(cart, e_cart)
+      data$aspect_southeastness<- radial(cart, se_cart)
+      data$aspect_southness <- radial(cart, s_cart)
+      data$aspect_southwestness<- radial(cart, sw_cart)
+      data$aspect_westness <- radial(cart, w_cart)
+      data$aspect_northwestness<- radial(cart, nw_cart)
+
+      numeric_features <<- c(numeric_features, 'aspect_northness', 'aspect_northeastness', 'aspect_eastness', 'aspect_southeastness', 'aspect_southness', 'aspect_southwestness', 'aspect_westness', 'aspect_northwestness')
+      features <<- c(features, 'aspect_northness', 'aspect_northeastness', 'aspect_eastness', 'aspect_southeastness', 'aspect_southness', 'aspect_southwestness', 'aspect_westness', 'aspect_northwestness')
+
+      data
+    }
+
+    preprocess_before <- function(x) {
+        return(x %>% factor_8_encode_aspect %>% subset_features)
+    }
+
+    preprocess_after <- function(x) {
+      return(x %>% handle_missing_values %>% one_hot_encode %>% mutate_at(numeric_features, scale) %>% handle_nan_values)
+    }
+
+    calc_groups <- function(x) {
+        # - define groups: dummy coding of a factor is treated as group
+        # - alternative
+        # - find factors
+        l.covar <- features
+        l.factors <- names(x[l.covar])[t.f <- unlist(lapply(x[l.covar], is.factor))]
+        l.numeric <- names(t.f[!t.f])
+        # create a vector that labels the groups with the same number
+        groups <- c(
+          1:length(l.numeric),
+          unlist(
+            sapply(1:(length(l.factors)), function(n) {
+              rep(n + length(l.numeric), nlevels(x[[l.factors[n]]])-1)
+            })
+          )
+        )
+        return(groups)
+    }
+
+    plot_boxplot <- function(coefs, title) {
+        print(str_interp("${Sys.Date()} | ${Sys.time()}"))
+        data <- coefs
+        ggplot(stack(data), aes(x = ind, y = values)) +
+            geom_boxplot() +
+            ggtitle(title) +
+            scale_x_discrete(guide = guide_axis(angle = 90))
+    }
+
+    cv.block.training <- function(data, k.boot = 20, n.folds = 5) {
+
+        # Needed for raster
+        elevation <- raster(str_interp("/Users/beni/Documents/BayianLasso/data/data/Explanatory_Variables_Datasets/Elevation/DEM_2m_${Site}.tif"))
+        pa_data <- sf::st_as_sf(data, coords = c("x", "y"), crs = raster::crs(elevation))
+
+        result <- c()
+        result$y <- list()
+        result$y_hat <- list()
+
+        for (j in 1:k.boot) {
+
+            y.boot <- vector()
+            y_hat.boot <- vector()
+
+            set.seed(j+1)
+            print(j)
+
+            # spatial blocking by specified range and random assignment
+            sb1 <- spatialBlock(speciesData = pa_data,
+                                species = "lslpts",
+                                theRange = 1000,
+                                rasterLayer = elevation,
+                                k = n.folds,
+                                selection = "random",
+                                iteration = 10,
+                                showBlocks = FALSE)
+            cvID <- sb1$foldID
+            # - merge data together with ID subset
+            data.ID <- cbind(data, cvID)
+            for (i in 1:n.folds) {
+
+                # reset features used (may has changed in preprocess)
+                numeric_features <<- numeric_features_init
+                categorical_features <<- categorical_features_init
+                features <<- features_init
+
+                res <- split_label(data.ID)
+
+                y <- res$y
+
+                # To preprocess on hole dataset instead of only train set -> bad practice but here no problem (only standardize and ohe)
+                x <- res$x
+                x <- preprocess_before(x)
+                groups <- calc_groups(x)
+                x <- preprocess_after(x)
+
+                train.ids <- with(res$x, which(cvID != i))
+                test.ids <- with(res$x, which(cvID == i))
+
+                x.train <- x[train.ids,]
+                y.train <- y[train.ids]
+
+                x.test <- x[test.ids,]
+                y.test <- y[test.ids]
+
+                print("DO IT")
+                print(length(train.ids))
+                print(dim(x.train))
+                print(length(test.ids))
+                print(dim(x.test))
+
+                fit.grpreg <- cv.grpreg(
+                    X = x.train,
+                    y = y.train,
+                    group = groups,
+                    penalty = "grLasso",
+                    family = "binomial",
+                    nfolds = n.folds.hyperparameter,
+                    nlambda = 100,
+                    alpha = 1, # alpha=1 => No l2-regularization
+                    returnY = TRUE
+                )
+
+                # - choose optimal lambda: CV minimum error + 1 SE (see glmnet)
+                l.se <- fit.grpreg$cve[fit.grpreg$min] + fit.grpreg$cvse[fit.grpreg$min]
+
+                idx.se <- min(which(fit.grpreg$cve < l.se))
+                lambda.min <- fit.grpreg$lambda.min
+                # - get the non-zero coefficients:
+                #coeffiecients.glmnet <- coef(glmnet.glmnet, s=lambda.min)
+                coef.grpreg <- fit.grpreg$fit$beta[, idx.se]
+
+                coefs.boot.row <- data.frame(t(coef.grpreg))
+                colnames(coefs.boot.row) <- names(coef.grpreg)
+                coefs.boot.df <- rbindx(coefs.boot.row, if(exists("coefs.boot.df")) coefs.boot.df)
+
+                # Predict on test set
+                y_hat.boot.fold <- predict(
+                  fit.grpreg,
+                  X = data.matrix(x.test),
+                  lambda=fit.grpreg$lambda[idx.se],
+                  type="response"
+                )
+
+                y.boot <- append(y.boot, y.test)
+                y_hat.boot <- append(y_hat.boot, y_hat.boot.fold)
+            }
+
+            result$y[[j]] <- y.boot
+            result$y_hat[[j]] <- y_hat.boot
+
+        }
+
+        result$coefs <- coefs.boot.df
+        return(result)
+    }
+
+    preprocess_before <- function(x) {
+        return(x %>% factor_4_encode_aspect %>% subset_features)
+    }
+
+    res_ohe4 <- cv.block.training(lsl_data, k.boot, n.folds)
+
+    preprocess_before <- function(x) {
+        return(x %>% factor_8_encode_aspect %>% subset_features)
+    }
+
+    res_ohe8 <- cv.block.training(lsl_data, k.boot, n.folds)
+
+    preprocess_before <- function(x) {
+        return(x %>% rbf_4_aspect %>% subset_features)
+    }
+
+    res_rbf4 <- cv.block.training(lsl_data, k.boot, n.folds)
+
+    preprocess_before <- function(x) {
+        return(x %>% rbf_8_aspect %>% subset_features)
+    }
+
+    res_rbf8 <- cv.block.training(lsl_data, k.boot, n.folds)
+
+    save(res_ohe4, res_ohe8, res_rbf4, res_rbf8, file = file.path(out_dir, str_interp("${Site}_res.data")))
+
+    res_ohe8_f <- flatten.results(res_ohe8)
+    res_ohe4_f <- flatten.results(res_ohe4)
+    res_rbf4_f <- flatten.results(res_rbf4)
+    res_rbf8_f <- flatten.results(res_rbf8)
+
+    n <- length(res_ohe8_f$y)
+
+    for (i in 1:brier.k.boot ) {
+      idx <- sample(1:n, n, replace=TRUE)
+      boot.correct[i,str_interp("${Site}$ohe8")] <- mean( ( res_ohe8_f$y[idx] - res_ohe8_f$y_hat[idx] )^2)
+      boot.correct[i,str_interp("${Site}$ohe4")] <- mean( ( res_ohe4_f$y[idx] - res_ohe4_f$y_hat[idx] )^2)
+      boot.correct[i,str_interp("${Site}$rbf4")] <- mean( ( res_rbf4_f$y[idx] - res_rbf4_f$y_hat[idx] )^2)
+      boot.correct[i,str_interp("${Site}$rbf8")] <- mean( ( res_rbf8_f$y[idx] - res_rbf8_f$y_hat[idx] )^2)
+    }
+
+}
+
+```
+```{r}
+
+par(mar=c(15,2,1,1))
+
+ggplot(stack(data.frame(boot.correct)), aes(x = ind, y = values)) +
+  geom_boxplot() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+```
+
+```{r}
+
+Sites <- c(
+    "Arosa",
+    ## "Baulmes",
+    "Chrauchtal",
+    "Hornbach",
+    #"Rappetal",
+    "Turbach",
+    "Urseren",
+    "Val_Cluozza"
+    #"Val_D_Entremont",
+    #"Val_Piora"
+)
+
+out_dir <- file.path(current_dir, "out", "aspect_1_05")
+
+for (Site in Sites) {
+
+    load(file.path(out_dir, str_interp("${Site}_res.data")))
+
+    res_ohe8_f <- flatten.results(res_ohe8)
+    res_ohe4_f <- flatten.results(res_ohe4)
+    res_rbf4_f <- flatten.results(res_rbf4)
+    res_rbf8_f <- flatten.results(res_rbf8)
+
+    n <- length(res_ohe8_f$y)
+
+    for (i in 1:brier.k.boot ) {
+      idx <- sample(1:n, n, replace=TRUE)
+      boot.correct[i,str_interp("${Site}$ohe4")] <- mean( ( res_ohe4_f$y[idx] - res_ohe4_f$y_hat[idx] )^2)
+      boot.correct[i,str_interp("${Site}$ohe8")] <- mean( ( res_ohe8_f$y[idx] - res_ohe8_f$y_hat[idx] )^2)
+      boot.correct[i,str_interp("${Site}$rbf4")] <- mean( ( res_rbf4_f$y[idx] - res_rbf4_f$y_hat[idx] )^2)
+      boot.correct[i,str_interp("${Site}$rbf8")] <- mean( ( res_rbf8_f$y[idx] - res_rbf8_f$y_hat[idx] )^2)
+    }
+}
+
+```

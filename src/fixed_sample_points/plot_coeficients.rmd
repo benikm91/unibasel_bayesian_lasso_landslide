@@ -46,8 +46,8 @@ coefs.bayesian.lauren <- c()
 
 for (site in sites) {
     print(site)
-    coefs.frequentist.lauren[[site]] <- read.fst(str_interp('res/coef/freq/${site}_coef_frequentist.block.lauren.fst'))
-    coefs.bayesian.lauren[[site]] <- read.fst(str_interp('res/coef/freq/${site}_coef_bayesian.lauren.fst'))
+    coefs.frequentist.lauren[[site]] <- read.fst(str_interp('res/coef/freq_24_5_22/${site}_coef_frequentist.block.lauren.fst'))
+    coefs.bayesian.lauren[[site]] <- read.fst(str_interp('res/coef/freq_24_5_22/${site}_coef_bayesian.lauren.fst'))
 }
 
 ```
@@ -79,7 +79,7 @@ for (site in sites) {
 
 # Note that: exp(coef) = odds(Y=1 | X = 1) / odds(Y=1 | X = 0) due to log odd (p. 164)
 
-for (site in c('Arosa')) {
+for (site in sites) {
     print(site)
     y_max <- max(max(coefs.frequentist.lauren[[site]], na.rm = TRUE), max(exp(coefs.bayesian.lauren[[site]]), na.rm = TRUE))
     a <- plot_boxplot(exp(coefs.frequentist.lauren[[site]]), str_interp("${site} (Frequentist)")) +

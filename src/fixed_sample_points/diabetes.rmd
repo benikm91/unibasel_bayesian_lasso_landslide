@@ -145,9 +145,7 @@ b <- plot_boxplot(coef.bayesian, "Bayesian") +
 
 # p <- a / b
 
-print(colnames(coef.grpreg))
-
-# print(a)
-# print(b)
+print(a)
+print(b)
 
 ```

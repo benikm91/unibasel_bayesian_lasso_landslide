@@ -41,7 +41,7 @@ Sites <- c(
   # "Val_Piora"=2015
 )
 
-out_dir <- "/Users/beni/Documents/BayianLasso/data/data/out"
+out_dir <- "/Users/beni/Documents/BayianLasso/data/data/out_R_new"
 
 data_dir <- "/Users/beni/Documents/BayianLasso/data/data";
 explanatory_variables_dir <- file.path(data_dir, "Explanatory_Variables_Datasets")
@@ -171,32 +171,36 @@ for (Site in names(Sites)) {
 
   ##### add Categorial Datasets
 
-  lithology <- readOGR(file.path(lithology_dir, str_interp("${Site}_Lithology.shp")))
+    field <- "LITHO"
+    lithology <- readOGR(file.path(lithology_dir, str_interp("${Site}_Lithology.shp")))
+    lithology$field <- factor(lithology[[field]])
 
-  xx <- rasterize(
-    lithology,
-    raster(extent(lithology), res=2),
-    field="LITHO"
-  )
+    lithology_raster <- rasterize(lithology, raster(extent(lithology), res=2), field="field")
+    # ratify raster
+    litho <- ratify(lithology_raster)
 
-  litho <- ratify(
-    rasterize(
-      lithology,
-      raster(extent(lithology), res=2),
-      field="LITHO"
-    )
-  )
+    print(litho)
 
-  rat <- levels(litho)[[1]]
-  rat$lithology <- lithology$LITHO
-  levels(litho) <- rat
+    rat <- levels(litho)[[1]]
+    rat[[field]] <- levels(lithology$field)
+    levels(litho) <- rat
 
-  lithology_extracted <- raster::extract(litho, lsl[c('x', 'y')], method='simple')
-  lithology_extracted <- factorValues(litho, lithology_extracted)
+    print(litho)
 
-  # TODO try lsl$lithology <- lithology_extracted$lithology
-  lsl$lithology <- lithology_extracted
-  lsl$lithology <- lsl$lithology$lithology
+    # Create levels
+    # rat <- levels(litho)[[1]]
+    # rat$lithology <- lithology$LITHO
+    # levels(litho) <- rat
+    #rasterVis::levelplot(litho)
+    lithology_extracted <- raster::extract(litho, lsl[c('x', 'y')], method='simple')
+
+    print(lithology_extracted)
+
+    lithology_extracted <- factorValues(litho, lithology_extracted)
+    lsl$lithology <- lithology_extracted
+    lsl$lithology <- lsl$lithology$lithology
+
+
 
   gesteinsklasse <- readOGR(file.path(gesteinsklasse_dir, str_interp("${Site}_Gesteinsklasse.shp")))
 

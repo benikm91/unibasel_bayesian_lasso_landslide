@@ -130,10 +130,10 @@ numeric_features_my <- c(
   'snow_days',
   'snow_cover_days',
   'grow_season_length',
-  'frost_ch_freq',
-  'flowdir',  # new
-  'stack_precip_5Y',  # new
-  'stack_precip_10Y'  # new
+  'frost_ch_freq'
+  # 'flowdir',  # new
+  # 'stack_precip_5Y',  # new
+  # 'stack_precip_10Y'  # new
 )
 categorical_features_my <- c(
   'gesteinsklasse',
@@ -189,7 +189,7 @@ handle_nan_values <- function (data) {
 
 one_hot_encode_factors <- function(data) {
     # One Hot Encoded (dummy variables) factor features
-    fastDummies::dummy_cols(lsl_my_data, select_columns = categorical_features_lauren, remove_selected_columns=TRUE, remove_first_dummy = TRUE)
+    fastDummies::dummy_cols(data, select_columns = categorical_features_lauren, remove_selected_columns=TRUE, remove_first_dummy = FALSE)
 }
 
 remove_coordinates <- function(data) {
@@ -295,6 +295,14 @@ cv.training <- function(data, features, k.boot = 20, n.folds = 5) {
             x.train <- preprocess(res$x)
             y.train <- res$y
 
+            print("TRAIN")
+            print(dim(x.train))
+            print(typeof(x.train))
+            print(class(x.train))
+            print(length(y.train))
+            print(typeof(y.train))
+            print(class(y.train))
+
             # grpreg: standardizes the data and includes an intercept by default
             fit.grpreg <- cv.grpreg(
                 X = x.train,
@@ -329,7 +337,7 @@ cv.training <- function(data, features, k.boot = 20, n.folds = 5) {
 ```
 ```{r}
 
-# coef_frequentist.nonblock.lauren <- cv.training(lsl_lauren_data, features_lauren, 20, 5)
+coef_frequentist.nonblock.lauren <- cv.training(lsl_lauren_data, features_lauren, 20, 5)
 
 ```
 
@@ -414,18 +422,18 @@ coef_frequentist.lauren <- cv.block.training(lsl_lauren_data, features_lauren, 2
 ```
 ```{r}
 
-plot_boxplot(coef_frequefrequentist.lauren, str_interp("Frequentist Lauren: ${Site}"))
+plot_boxplot(coef_frequentist.lauren, str_interp("Frequentist Lauren: ${Site}"))
 
 ```
 
 ```{r}
 
-# coef_frequentist.my <- cv.block.training(lsl_my_data, features_my, 20, 5)
+coef_frequentist.my <- cv.block.training(lsl_my_data, features_my, 20, 5)
 
 ```
 ```{r}
 
-# plot_boxplot(coef_frequentist.my, str_interp("Frequentist My: ${Site}"))
+plot_boxplot(coef_frequentist.my, str_interp("Frequentist My: ${Site}"))
 
 ```
 

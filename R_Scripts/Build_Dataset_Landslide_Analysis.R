@@ -289,7 +289,6 @@ levels(gestk) <- rat
 gesteinsklasse_extracted <- raster::extract(gestk, lsl[,1:2], method='simple')
 gesteinsklasse_extracted <- factorValues(gestk, gesteinsklasse_extracted)
 lsl$gesteinsklasse <- gesteinsklasse_extracted
-
 lsl$gesteinsklasse <- lsl$gesteinsklasse$gesteinsklasse
 
 

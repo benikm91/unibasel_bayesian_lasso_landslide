@@ -20,6 +20,12 @@ np.random.seed(42)
 config = Config.default()
 output_dir = os.path.join(os.path.dirname(__file__), "out")
 
+
+def handle_missing_values(value):
+    # Missing values are encoded as float.min in .tif files -> Replace them with NaN
+    return value if value > -3e-37 else np.nan
+
+
 for site in config.sites:
     df_landslide_points = pd.read_csv(os.path.join(points_dir, f"{site.name}_Landslide_Points_4sqm.txt"))
     df_no_landslide_points = pd.read_csv(os.path.join(points_dir, f"{site.name}_Random_Points_nonLS_4sqm.txt"))
@@ -83,28 +89,29 @@ for site in config.sites:
 
     coord_list = list(zip(gdf_points['geometry'].x , gdf_points['geometry'].y))
 
-    gdf_points['elevation'] = [x[0] for x in elevation.sample(coord_list)]
-    gdf_points['slope'] = [x[0] for x in slope.sample(coord_list)]
-    gdf_points['aspect'] = [x[0] for x in aspect.sample(coord_list)]
-    gdf_points['twi'] = [x[0] for x in twi.sample(coord_list)]
-    gdf_points['flowacc'] = [x[0] for x in flowacc.sample(coord_list)]
-    gdf_points['flowdir'] = [x[0] for x in flowdir.sample(coord_list)]
-    gdf_points['curvature_plan'] = [x[0] for x in curvature_plan.sample(coord_list)]
-    gdf_points['curvature_profile'] = [x[0] for x in curvature_profile.sample(coord_list)]
-    gdf_points['max_precip_5Y'] = [x[0] for x in max_precip_5Y.sample(coord_list)]
-    gdf_points['max_precip_10Y'] = [x[0] for x in max_precip_10Y.sample(coord_list)]
-    gdf_points['stack_precip_5Y'] = [x[0] for x in stack_precip_5Y.sample(coord_list)]
-    gdf_points['stack_precip_10Y'] = [x[0] for x in stack_precip_10Y.sample(coord_list)]
-    gdf_points['snow_days'] = [x[0] for x in snow_days.sample(coord_list)]
-    gdf_points['snow_cover_days'] = [x[0] for x in snow_cover_days.sample(coord_list)]
-    gdf_points['grow_season_length'] = [x[0] for x in grow_season_length.sample(coord_list)]
-    gdf_points['frost_ch_freq'] = [x[0] for x in frost_ch_freq.sample(coord_list)]
-    gdf_points['distance_to_roads'] = [x[0] for x in distance_to_roads.sample(coord_list)]
-    gdf_points['distance_to_streams'] = [x[0] for x in distance_to_streams.sample(coord_list)]
-    gdf_points['density_roads'] = [x[0] for x in density_roads.sample(coord_list)]
-    gdf_points['density_streams'] = [x[0] for x in density_streams.sample(coord_list)]
+    hmv = handle_missing_values
+    gdf_points['elevation'] = [hmv(x[0]) for x in elevation.sample(coord_list)]
+    gdf_points['slope'] = [hmv(x[0]) for x in slope.sample(coord_list)]
+    gdf_points['aspect'] = [hmv(x[0]) for x in aspect.sample(coord_list)]
+    gdf_points['twi'] = [hmv(x[0]) for x in twi.sample(coord_list)]
+    gdf_points['flowacc'] = [hmv(x[0]) for x in flowacc.sample(coord_list)]
+    gdf_points['flowdir'] = [hmv(x[0]) for x in flowdir.sample(coord_list)]
+    gdf_points['curvature_plan'] = [hmv(x[0]) for x in curvature_plan.sample(coord_list)]
+    gdf_points['curvature_profile'] = [hmv(x[0]) for x in curvature_profile.sample(coord_list)]
+    gdf_points['max_precip_5Y'] = [hmv(x[0]) for x in max_precip_5Y.sample(coord_list)]
+    gdf_points['max_precip_10Y'] = [hmv(x[0]) for x in max_precip_10Y.sample(coord_list)]
+    gdf_points['stack_precip_5Y'] = [hmv(x[0]) for x in stack_precip_5Y.sample(coord_list)]
+    gdf_points['stack_precip_10Y'] = [hmv(x[0]) for x in stack_precip_10Y.sample(coord_list)]
+    gdf_points['snow_days'] = [hmv(x[0]) for x in snow_days.sample(coord_list)]
+    gdf_points['snow_cover_days'] = [hmv(x[0]) for x in snow_cover_days.sample(coord_list)]
+    gdf_points['grow_season_length'] = [hmv(x[0]) for x in grow_season_length.sample(coord_list)]
+    gdf_points['frost_ch_freq'] = [hmv(x[0]) for x in frost_ch_freq.sample(coord_list)]
+    gdf_points['distance_to_roads'] = [hmv(x[0]) for x in distance_to_roads.sample(coord_list)]
+    gdf_points['distance_to_streams'] = [hmv(x[0]) for x in distance_to_streams.sample(coord_list)]
+    gdf_points['density_roads'] = [hmv(x[0]) for x in density_roads.sample(coord_list)]
+    gdf_points['density_streams'] = [hmv(x[0]) for x in density_streams.sample(coord_list)]
 
-    gdf_points['roughness'] = [x[0] for x in roughness.sample(coord_list)]
+    gdf_points['roughness'] = [hmv(x[0]) for x in roughness.sample(coord_list)]
 
     lithology = gpd.read_file(os.path.join(config.lithology_dir, f"{site.name}_Lithology.shp"))
     gdf_points['lithology'] = gdf_points.sjoin(lithology, how="left", predicate='intersects')['LITHO']
